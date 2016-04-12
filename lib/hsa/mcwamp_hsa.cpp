@@ -720,12 +720,16 @@ public:
                 std::cerr << "read(" << device << "," << dst << "," << count << "," << offset << "): use HSA memory copy\n";
 #endif
                 hsa_status_t status = HSA_STATUS_SUCCESS;
-                // Make sure host memory is accessible to gpu, and Jack confirm that, both device and dst allocated using 
-                // hsa allocator.
+                // Make sure host memory is accessible to gpu
+                // FIXME: host memory is allocated through OS allocator, if not, correct it.
                 hsa_agent_t* agent = static_cast<hsa_agent_t*>(getHSAAgent()); 
-                status = hsa_amd_agents_allow_access(1, agent, NULL, dst);
+                void* va = nullptr;
+                status = hsa_amd_memory_lock(dst, count, agent, 1, &va);
                 STATUS_CHECK(status, __LINE__);
-                status = hsa_memory_copy(dst, (char*)device + offset, count);
+                status = hsa_memory_copy(va, (char*)device + offset, count);
+                STATUS_CHECK(status, __LINE__);
+                // Unlock the host memory
+                status = hsa_amd_memory_unlock(dst);
                 STATUS_CHECK(status, __LINE__);
             } else {
 #if KALMAR_DEBUG
@@ -747,10 +751,15 @@ public:
 #endif
                 hsa_status_t status = HSA_STATUS_SUCCESS;
                 // Make sure host memory is accessible to gpu
+                // FIXME: host memory is allocated through OS allocator, if not, correct it.
                 hsa_agent_t* agent = static_cast<hsa_agent_t*>(getHSAAgent()); 
-                status = hsa_amd_agents_allow_access(1, agent, NULL, src);
+                void* va = nullptr;
+                status = hsa_amd_memory_lock(const_cast<void*>(src), count, agent, 1, &va);
                 STATUS_CHECK(status, __LINE__);
-                status = hsa_memory_copy((char*)device + offset, src, count);
+                status = hsa_memory_copy((char*)device + offset, va, count);
+                STATUS_CHECK(status, __LINE__);
+                // Unlock the host memory
+                status = hsa_amd_memory_unlock(const_cast<void*>(src));
                 STATUS_CHECK(status, __LINE__);
             } else {
 #if KALMAR_DEBUG
@@ -1267,6 +1276,10 @@ public:
     
             status = hsa_amd_memory_pool_allocate(am_region, count, 0, &data);
             STATUS_CHECK(status, __LINE__);
+
+            hsa_agent_t* agent = static_cast<hsa_agent_t*>(getHSAAgent());
+            status = hsa_amd_agents_allow_access(1, agent, NULL, data);
+            STATUS_CHECK(status, __LINE__); 
         } else {
 #if KALMAR_DEBUG
             std::cerr << "create(" << count << "," << key << "): use host memory allocator\n";
@@ -1459,16 +1472,35 @@ public:
         return ri._am_memory_pool;
     }
 
-    bool hasHSAKernargRegion() { 
+    bool hasHSAKernargRegion() const { 
       return ri._found_kernarg_memory_pool;
     }
 
-    bool hasHSAFinegrainedRegion() {
+    bool hasHSAFinegrainedRegion() const {
       return ri._found_finegrained_system_memory_pool;
     }
 
-    bool hasHSACoarsegrainedRegion() {
+    bool hasHSACoarsegrainedRegion() const {
       return ri. _found_local_memory_pool;
+    }
+
+    bool is_peer(Kalmar::KalmarDevice* other) override {
+      if(!hasHSACoarsegrainedRegion())
+          return false;
+
+      auto self_pool = getHSAAMRegion();
+      hsa_amd_memory_pool_access_t access;
+
+      hsa_agent_t* agent = static_cast<hsa_agent_t*>(other->getHSAAgent());
+
+      hsa_status_t status = hsa_amd_agent_memory_pool_get_info(*agent, self_pool, HSA_AMD_AGENT_MEMORY_POOL_INFO_ACCESS, &access);
+      if(HSA_STATUS_SUCCESS != status)
+          return false; 
+    
+      if(HSA_AMD_MEMORY_POOL_ACCESS_ALLOWED_BY_DEFAULT == access  || HSA_AMD_MEMORY_POOL_ACCESS_DISALLOWED_BY_DEFAULT == access)
+          return true;
+  
+      return false;
     }
 
     void releaseKernargBuffer(void* kernargBuffer, int kernargBufferIndex) {
@@ -2649,4 +2681,3 @@ extern "C" void PushArgPtrImpl(void *ker, int idx, size_t sz, const void *v) {
   void *val = const_cast<void*>(v);
   dispatch->pushPointerArg(val);
 }
-

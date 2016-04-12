@@ -78,7 +78,7 @@ public:
     int remove(void *pointer);
 
     MapTrackerType::iterator find(const void *hostPtr) ;
-
+    
     MapTrackerType::iterator readerLockBegin() { _mutex.lock(); return _tracker.begin(); } ;
     MapTrackerType::iterator end() { return _tracker.end(); } ;
     void readerUnlock() { _mutex.unlock(); };
@@ -335,6 +335,5 @@ size_t am_memtracker_reset(const hc::accelerator &acc)
 {
     return g_amPointerTracker.reset(acc);
 }
-
 
 } // end namespace hc.
